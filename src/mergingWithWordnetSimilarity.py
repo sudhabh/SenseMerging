@@ -1,0 +1,331 @@
+#Rada Similarity Measures
+import subprocess
+from collections import OrderedDict
+import operator
+import math
+import numpy
+from numpy import array
+
+############################################################################################
+corpus_simi_threshold=0.9
+print "Corpus Similarity Threshold....",corpus_simi_threshold
+wn_simi_threshold=1-corpus_simi_threshold
+print "WordNet Similarity Threshold....",wn_simi_threshold
+
+print "Loading HWN verb synsets...."
+#print "\nCreating idSynsetGlossDict...................."
+synsetList={}
+idSynsetGlossDict={}
+fp=open("../resources/hinwn/data.verb","r")
+for line in fp:
+	line=line.strip()
+	ID=line.split(":~:")[0]
+	synsetMembers=line.split(":~:")[-1]	
+	temp=[]
+	for synsetword in synsetMembers.split(", "):
+		if " " in synsetword:
+			temp=synsetword.split(" ")
+		else:
+			temp.append(synsetword)
+	synsetList[ID]=temp
+	idSynsetGlossDict[int(ID)]="{"+line.split(":~:")[-1]+"} "+line.split(":~:")[2]
+fp.close()
+#print "Size of HWN verb synsets",len(idSynsetGlossDict)
+
+#print "Loading wordSenseDict...."
+wordSenseDict={}
+fp=open("../resources/hinwn/verb.idx","r")
+for line in fp:
+	line=line.strip()
+	word=line.split(" ")[0]
+	tagList=line.split(" ")[1:]
+	wordSenseDict[word]=tagList
+fp.close()
+#print "Size of HWN verbs: ",len(wordSenseDict)
+
+#print "Loading glosses................"
+taggedGlossDict={}
+fp_gloss=open("../resources/hinwn/tagged.gloss.txt","r")
+for line in fp_gloss:
+	line=line.strip()
+	Id=line.split("\t")[0]
+	wordList=line.split("\t")[1].split(" ")
+	temp=[]
+	for w in wordList:
+		w=w.replace(" ","")
+		if "_S" not in w:
+			temp.append(w)
+		#if "_N" in w or "_V" in w or "J" in w:
+		#	temp.append(w)
+	taggedGlossDict[Id]=temp
+fp_gloss.close()
+#print "Size of glossDict", len(taggedGlossDict)
+
+#print "Loading TF-IDF of gloss words ..................."
+idf={}
+fp=open("../resources/glossWithTF-IDFScore.txt","r")
+for line in fp:
+	line=line.strip()
+	idf[line.split("\t")[0]]=int(line.split("\t")[1].split(".")[0])
+fp.close()
+#print "Size of tagged glosses",len(idf)
+
+print "Loading similarity scores for all word within glooses ..................."
+pathSimi={}
+lchSimi={}
+wupSimi={}
+fp=open("../resources/similarityoutput.txt","r")
+for line in fp:
+	line=line.strip()
+	word1=line.split("\t")[0]
+	word1=word1.replace(" ","")
+	word2=line.split("\t")[1]
+	word2=word2.replace(" ","")
+	path=float(line.split("\t")[3])
+	lch=float(line.split("\t")[5])
+	wup=float(line.split("\t")[7])
+	if word1 not in pathSimi:
+		temp={}
+		temp[word2]=path
+		pathSimi[word1]=temp
+	else:
+		temp={}
+		temp=pathSimi[word1]
+		temp[word2]=path
+		pathSimi[word1]=temp
+		
+	if word2 not in pathSimi:
+		temp={}
+		temp[word1]=path
+		pathSimi[word2]=temp
+	else:
+		temp={}
+		temp=pathSimi[word2]
+		temp[word1]=path
+		pathSimi[word2]=temp
+	s = 1/(1+numpy.exp(-lch))
+	lch_new=(s*2.0)-1.0
+	if word1 not in lchSimi:
+		temp={}
+		temp[word2]=lch_new
+		lchSimi[word1]=temp
+	else:
+		temp={}
+		temp=lchSimi[word1]
+		temp[word2]=lch_new
+		lchSimi[word1]=temp
+	
+	if word2 not in lchSimi:
+		temp={}
+		temp[word1]=lch_new
+		lchSimi[word2]=temp
+	else:
+		temp={}
+		temp=lchSimi[word2]
+		temp[word1]=lch_new
+		lchSimi[word2]=temp
+	
+	if word1 not in wupSimi:
+		temp={}
+		temp[word2]=wup
+		wupSimi[word1]=temp
+	else:
+		temp={}
+		temp=wupSimi[word1]
+		temp[word2]=wup
+		wupSimi[word1]=temp
+		
+	if word2 not in wupSimi:
+		temp={}
+		temp[word1]=wup
+		wupSimi[word2]=temp
+	else:
+		temp={}
+		temp=wupSimi[word2]
+		temp[word1]=wup
+		wupSimi[word2]=temp
+
+fp.close()
+print "Size of pathSimi",len(pathSimi)
+print "Size of lchSimi",len(lchSimi)
+print "Size of wupSimi",len(wupSimi)
+
+print "Loading word vectors...."
+vectorList={}
+fr_word2vec=open("../resources/leipnigAndBojarICILskip7.txt","r")
+for line in fr_word2vec:
+	line=line.strip()
+	word= line.split(" ")[0]
+	v=line.split(" ")[1:]
+	vectorList[word]=map(float, v)
+print "Size of word vectors=", len(vectorList)
+
+#print "Loading input files ..................."
+gold={}
+gold_cluster=0
+fp=open("../resources/gold_merging3.txt","r")
+for line in fp:
+	line=line.strip()
+	gold[line.split("\t")[0]]=int(line.split("\t")[1])
+	if int(line.split("\t")[1])==1:
+		gold_cluster=gold_cluster+1
+fp.close()
+print "Size of gold",len(gold)
+print "Total gold clusters",gold_cluster
+print "Total gold non-clusters",len(gold)-gold_cluster
+
+############################################################################################
+
+def findRadaSim(S1,S2):
+	if S1==S2:
+		return 1.0
+	else:
+		simi1=findSim(S1,S2)
+		simi2=findSim(S2,S1)
+		print "simi between ", S1, " and ", S2, " is", simi1
+		print "simi between ", S2, " and ", S1, " is", simi2
+		return 0.5*(simi1+simi2)
+
+def findSim(S1,S2):
+	simi=0.0
+	avgIDF=0.0
+	print "\n For words from gloss"," ",S1
+	for w in taggedGlossDict[S1]:
+		#if "_N" in w or "_V" in w or  "J" in w :
+		if w.split("_")[0] in idf:
+			#print "\t word: ",w
+			simi=simi+(maxSim_wup(w,S2)*float(idf[w.split("_")[0]]))
+			avgIDF=avgIDF+float(idf[w.split("_")[0]])
+			#print "\t word ",w,"\tmaxSimi","\tidf",idf[w.split("_")[0]],"simi",maxSim_wup(w,S2)*float(idf[w.split("_")[0]])
+	#print "AvgIDF",avgIDF,"Avgsimi",simi
+	if avgIDF!=0.0:
+		return simi/avgIDF
+	else:
+		return 0.0
+
+def maxSim(w1,S):
+	maX=0.0
+	for w2 in taggedGlossDict[S]:
+		simi=cosTheta(w1,w2)
+		#print "\t costheta:=",simi
+		if simi>maX:
+			maX=simi
+	return maX
+
+def maxSim_path(w1,S):
+	maX=0.0
+	simi=0.0
+	for w2 in taggedGlossDict[S]:
+		w2=w2.replace(" ","")
+		if w1 in pathSimi:
+			p_simi=pathSimi[w1]
+			if w2 in p_simi:
+				simi=p_simi[w2]
+		if simi>maX:
+			maX=simi
+	return maX
+def maxSim_wup(w1,S):
+	maX=0.0
+	simi=0.0
+	for w2 in taggedGlossDict[S]:
+		w2=w2.replace(" ","")
+		if w1 in wupSimi:
+			p_simi=wupSimi[w1]
+			if w2 in p_simi:
+				simi=p_simi[w2]
+		if simi>maX:
+			maX=simi
+	return maX
+def maxSim_lch(w1,S):
+	maX=0.0
+	simi=0.0
+	for w2 in taggedGlossDict[S]:
+		w2=w2.replace(" ","")
+		if w1 in lchSimi:
+			p_simi=lchSimi[w1]
+			if w2 in p_simi:
+				simi=p_simi[w2]
+		if simi>maX:
+			maX=simi
+	return maX
+	
+def cosTheta(w1,w2):
+	if w1==w2:
+		return 1.0
+	else:
+		if w1 in vectorList and w2 in vectorList:
+			dotProduct = reduce( operator.add, map( operator.mul, vectorList[w1], vectorList[w2]))
+			norm_w1= numpy.linalg.norm(vectorList[w1]) 
+			norm_w2= numpy.linalg.norm(vectorList[w2]) 
+			return (dotProduct /( norm_w1 * norm_w2))
+		else:
+			return 0.0
+
+
+#################################### RADA USING PATH based Similarity  ########################################################
+
+correctly_merged=0
+incorrectly_merged=0
+correctly_non_merged=0
+incorrectly_non_merged=0
+total_merged=0
+total_non_merged=0
+total=0 
+fw_error=open("error_radaSimilarity.txt","w")
+radaSimilarityMatrix={}
+
+print "\nRada Similarity using wordnet...."
+for word in gold:
+	simi={}
+	senses=wordSenseDict[word]
+	S1=senses[0]
+	S2=senses[1]
+	print "Target word",word,S1,S2
+	similarity=findRadaSim(S1,S2)
+	print "similairty",similarity
+	if similarity>=wn_simi_threshold:
+			if gold[word]==1:
+				correctly_merged=correctly_merged+1
+			else:
+				incorrectly_merged=incorrectly_merged+1
+			total_merged=total_merged+1
+	else:
+			if gold[word]==0:
+				correctly_non_merged=correctly_non_merged+1
+			else:
+				incorrectly_non_merged=incorrectly_non_merged+1
+				fw_error.write(word+"\t"+str(similarity)+"\n")
+			total_non_merged=total_non_merged+1
+				
+p=correctly_merged/float(total_merged)
+r=correctly_merged/float(gold_cluster)
+print "\n\t\tTotal merged", total_merged		
+print "\n\t\tCorrectly merged", correctly_merged	
+print "\t\t***************************"
+print "\t\tPrecision: ",p
+print "\t\tRecall: ",r
+print "\t\tF-measure: ",2*p*r/float(p+r)
+print "\t\t***************************"
+
+print "\n\t\tTotal non-merged", total_non_merged
+print "\t\t***************************"
+print "\t\tPrecision: ",correctly_non_merged/float(total_non_merged)
+print "\t\tRecall: ",correctly_non_merged/float(len(gold)-gold_cluster)	
+
+fw_error.close()				
+
+
+def avgIDF(S1):
+	avg=0.0
+	#print "\n For words from gloss"," ",S1
+	for w in taggedGlossDict[S1]:
+		#if "_N" in w or "_V" in w or  "J" in w :
+		if w.split("_")[0] in idf:
+			#print "\t word: ",w
+			avg=avg+idf[w.split("_")[0]]
+			#print "\tmaxSimi",maxSim(w,S2),"\tidf",idf[w.split("_")[0]]
+	return avg
+
+################################### END ########################################################
+
+
